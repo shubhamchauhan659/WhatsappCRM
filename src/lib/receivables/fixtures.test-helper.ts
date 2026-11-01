@@ -63,6 +63,7 @@ export function makeFollowUp(p: Partial<FollowUpRow> = {}): FollowUpRow {
     status: "reminder_sent",
     summary: null,
     message: null,
+    has_message: false,
     next_follow_up_on: null,
     promise_date: null,
     promised_paise: null,

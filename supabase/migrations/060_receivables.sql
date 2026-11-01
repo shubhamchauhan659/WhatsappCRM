@@ -207,6 +207,8 @@ CREATE TABLE IF NOT EXISTS follow_ups (
   status TEXT NOT NULL,
   summary TEXT,
   message TEXT,
+  -- Lets list views skip the (large) message body and fetch it on demand.
+  has_message BOOLEAN GENERATED ALWAYS AS (message IS NOT NULL) STORED,
   next_follow_up_on DATE,
   promise_date DATE,
   promised_paise BIGINT,
@@ -438,6 +440,7 @@ BEGIN
       OR NEW.recorded_by IS DISTINCT FROM OLD.recorded_by
       OR NEW.created_at IS DISTINCT FROM OLD.created_at
       OR NEW.client_ref IS DISTINCT FROM OLD.client_ref
+      OR NEW.message IS DISTINCT FROM OLD.message
     ) THEN
       RAISE EXCEPTION 'follow-up identity columns cannot be changed'
         USING ERRCODE = '42501';
@@ -480,7 +483,10 @@ BEGIN
 
   IF TG_OP = 'UPDATE' THEN
     FOR v_key IN SELECT jsonb_object_keys(v_new) LOOP
-      IF v_key <> 'updated_at' AND (v_new -> v_key) IS DISTINCT FROM (v_old -> v_key) THEN
+      -- Derived totals are already audited as the payment row that moved
+      -- them; skipping them halves audit volume on busy ledgers.
+      IF v_key NOT IN ('updated_at', 'paid_paise', 'credited_paise', 'outstanding_paise', 'has_message')
+         AND (v_new -> v_key) IS DISTINCT FROM (v_old -> v_key) THEN
         v_changes := v_changes || jsonb_build_object(
           v_key, jsonb_build_object('from', v_old -> v_key, 'to', v_new -> v_key)
         );
@@ -493,7 +499,13 @@ BEGIN
        AND (v_old ->> 'voided_at') IS NULL AND (v_new ->> 'voided_at') IS NOT NULL THEN
       v_action := 'void';
     END IF;
+  ELSIF TG_OP = 'INSERT' THEN
+    -- The inserted row itself is the record; keep the key facts, not
+    -- the free-text bodies (fits free-tier database sizes).
+    v_changes := v_row - 'message' - 'summary' - 'internal_notes' - 'notes'
+                       - 'account_id' - 'created_at' - 'updated_at' - 'has_message';
   ELSE
+    -- DELETE: keep everything — the row is gone after this.
     v_changes := v_row;
   END IF;
 

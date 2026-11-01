@@ -488,6 +488,28 @@ describe("account lifecycle", () => {
     expect(err.code).toBe("23001"); // restrict_violation: accounts.owner_user_id ON DELETE RESTRICT
   });
 
+  it("the demo seed script applies cleanly, is idempotent, and exercises every queue state", async () => {
+    const demo = await t.createUser("demo@example.com");
+    const raw = readFileSync(join(process.cwd(), "scripts", "seed-demo.sql"), "utf8");
+    // psql-only syntax → plain SQL for PGlite.
+    const sql = raw
+      .replace(/^\\set .*$/m, "")
+      .replace(/:'account_email'/g, "'demo@example.com'");
+    await t.db.exec(sql);
+    await t.db.exec(sql); // second run must not duplicate anything
+    const { rows } = await t.db.query<{ invoices: number; payments: number; follow_ups: number; overdue: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM invoices WHERE account_id = $1) AS invoices,
+         (SELECT count(*)::int FROM invoice_payments WHERE account_id = $1) AS payments,
+         (SELECT count(*)::int FROM follow_ups WHERE account_id = $1) AS follow_ups,
+         (SELECT count(*)::int FROM invoices WHERE account_id = $1 AND outstanding_paise > 0
+            AND due_date < (now() AT TIME ZONE 'Asia/Kolkata')::date) AS overdue`,
+      [demo.accountId],
+    );
+    // 7 invoices: 1005 is not yet due and 1006 is fully paid, so 5 are overdue.
+    expect(rows[0]).toEqual({ invoices: 7, payments: 4, follow_ups: 4, overdue: 5 });
+  });
+
   it("backup and restore: a plain SQL dump of a business's rows restores identical balances", async () => {
     const frank = await t.createUser("frank@example.com");
     const contact = await insertContact(frank, "Frank's customer", "+919811122233");

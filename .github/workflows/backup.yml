@@ -1,0 +1,99 @@
+name: Nightly database backup
+
+# Supabase Free has no automatic backups. This job takes an encrypted
+# pg_dump every night (02:00 IST) using scripts/backup.sh.
+#
+# Setup (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL     Supabase → Project Settings → Database → connection
+#                       string (session pooler, port 5432)
+#   BACKUP_PASSPHRASE   long random string; store a copy OUTSIDE GitHub
+# Where the encrypted file goes:
+#   - private repo  → workflow artifact (kept 30 days)
+#   - any repo      → Cloudflare R2 if R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+#                     R2_SECRET_ACCESS_KEY, R2_BUCKET are set (10 GB free)
+# Public repos never upload backups as artifacts, even encrypted.
+#
+# Without SUPABASE_DB_URL the job exits successfully doing nothing, so
+# forks and fresh clones stay green.
+
+on:
+  schedule:
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "Backups not configured (SUPABASE_DB_URL / BACKUP_PASSPHRASE secrets missing) — skipping."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET" ]; then
+            echo "r2=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "r2=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.cfg.outputs.enabled == 'true'
+
+      - name: Install PostgreSQL 17 client
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Dump, encrypt, verify
+        if: steps.cfg.outputs.enabled == 'true'
+        run: scripts/backup.sh backups
+
+      - name: Upload to Cloudflare R2
+        if: steps.cfg.outputs.enabled == 'true' && steps.cfg.outputs.r2 == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          for f in backups/*.dump.enc; do
+            aws s3 cp "$f" "s3://$R2_BUCKET/$(basename "$f")" \
+              --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
+          done
+
+      - name: Upload as artifact (private repositories only)
+        if: steps.cfg.outputs.enabled == 'true' && github.event.repository.private
+        uses: actions/upload-artifact@v7
+        with:
+          name: db-backup-${{ github.run_id }}
+          path: backups/*.dump.enc
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Refuse to publish backups from a public repository
+        if: steps.cfg.outputs.enabled == 'true' && !github.event.repository.private && steps.cfg.outputs.r2 != 'true'
+        run: |
+          echo "::error::This repository is public. Configure the R2_* secrets (or make the repo private) so backups have somewhere safe to go."
+          exit 1

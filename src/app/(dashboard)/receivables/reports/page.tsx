@@ -1,8 +1,12 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Download } from 'lucide-react';
+import { toast } from 'sonner';
+import { Download, Loader2 } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
+import { fetchAllPages } from '@/lib/supabase/paged-query';
+import { FOLLOW_UP_MESSAGE_COLUMNS } from '@/lib/receivables/types';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { CustomerLink, Section } from '@/components/receivables/bits';
@@ -30,16 +34,42 @@ export default function ReportsPage() {
   );
   const money = (p: number) => (p ? formatPaise(p, data?.currency ?? 'INR') : '—');
   const stamp = data?.today ?? 'export';
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const exports = exportData
+  // Message bodies are not in the snapshot; the follow-up export fetches them.
+  async function followUpsWithMessages(d: ExportData): Promise<string> {
+    const supabase = createClient();
+    const ids = d.followUps.filter((f) => f.has_message).map((f) => f.id);
+    const bodies = new Map<string, string | null>();
+    if (ids.length > 0) {
+      const rows = await fetchAllPages<{ id: string; message: string | null }>((from, to) =>
+        supabase.from('follow_ups').select(FOLLOW_UP_MESSAGE_COLUMNS).not('message', 'is', null).order('id').range(from, to),
+      );
+      for (const r of rows) bodies.set(r.id, r.message);
+    }
+    return followUpsCsv({ ...d, followUps: d.followUps.map((f) => ({ ...f, message: bodies.get(f.id) ?? null })) });
+  }
+
+  const exports: { key: string; file: string; build: () => string | Promise<string> }[] = exportData
     ? [
         { key: 'aging', file: `aging-${stamp}.csv`, build: () => agingCsv(exportData) },
         { key: 'invoices', file: `invoices-${stamp}.csv`, build: () => invoicesCsv(exportData) },
         { key: 'payments', file: `payments-${stamp}.csv`, build: () => paymentsCsv(exportData) },
-        { key: 'followUps', file: `follow-ups-${stamp}.csv`, build: () => followUpsCsv(exportData) },
+        { key: 'followUps', file: `follow-ups-${stamp}.csv`, build: () => followUpsWithMessages(exportData) },
         { key: 'customers', file: `customers-${stamp}.csv`, build: () => customersCsv(exportData) },
       ]
     : [];
+
+  async function runExport(e: (typeof exports)[number]) {
+    setBusy(e.key);
+    try {
+      downloadCsv(e.file, await e.build());
+    } catch {
+      toast.error(t('common.loadFailed'));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <ReceivablesShell title={t('reports.title')} description={t('reports.subtitle')}>
@@ -49,8 +79,8 @@ export default function ReportsPage() {
           <Section title={t('reports.exportsTitle')}>
             <div className="flex flex-wrap gap-2 px-4 py-3">
               {exports.map((e) => (
-                <Button key={e.key} variant="outline" size="sm" onClick={() => downloadCsv(e.file, e.build())}>
-                  <Download className="size-3.5" />
+                <Button key={e.key} variant="outline" size="sm" disabled={busy !== null} onClick={() => void runExport(e)}>
+                  {busy === e.key ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
                   {t(`reports.exports.${e.key}`)}
                 </Button>
               ))}

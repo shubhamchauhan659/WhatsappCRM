@@ -40,7 +40,14 @@ export interface ReceivablesSnapshot {
   currency: string;
 }
 
-let cache: { accountId: string; data: ReceivablesSnapshot } | null = null;
+let cache: { accountId: string; data: ReceivablesSnapshot; at: number } | null = null;
+
+/**
+ * Within this window, switching screens reuses the snapshot without a
+ * refetch. Every write calls reload() explicitly, so this only trims
+ * redundant reads (Supabase Free includes 5 GB egress / month).
+ */
+const FRESH_MS = 60_000;
 
 /** BIGINT columns arrive as JSON numbers; coerce defensively. */
 const num = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
@@ -112,7 +119,7 @@ export function useReceivables(): ReceivablesState & { reload: () => Promise<voi
     try {
       const data = await loadSnapshot(accountId);
       if (mine !== seq.current) return;
-      cache = { accountId, data };
+      cache = { accountId, data, at: Date.now() };
       setState({ status: "ready", data, error: null, refreshing: false });
     } catch (err) {
       if (mine !== seq.current) return;
@@ -123,7 +130,13 @@ export function useReceivables(): ReceivablesState & { reload: () => Promise<voi
 
   useEffect(() => {
     if (profileLoading || !accountId) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch; state is set after await
+    if (cache && cache.accountId === accountId && Date.now() - cache.at < FRESH_MS) {
+      // Fresh enough: show the cached snapshot (the date may have rolled over, so recompute "today").
+      const data = { ...cache.data, today: todayInTimeZone(cache.data.timeZone) };
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- adopt cached snapshot, no fetch
+      setState({ status: "ready", data, error: null, refreshing: false });
+      return;
+    }
     void reload();
   }, [profileLoading, accountId, reload]);
 

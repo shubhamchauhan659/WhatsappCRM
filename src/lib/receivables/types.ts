@@ -75,7 +75,10 @@ export interface FollowUpRow {
   channel: FollowUpChannel;
   status: FollowUpStatus;
   summary: string | null;
-  message: string | null;
+  /** Not part of list snapshots (see FOLLOW_UP_COLUMNS); load with FOLLOW_UP_MESSAGE_COLUMNS. */
+  message?: string | null;
+  /** True when a sent-message body is stored (generated column). */
+  has_message: boolean;
   next_follow_up_on: string | null;
   promise_date: string | null;
   promised_paise: number | null;
@@ -119,8 +122,11 @@ export const INVOICE_COLUMNS =
 export const PAYMENT_COLUMNS =
   "id, account_id, invoice_id, kind, amount_paise, paid_on, method, reference, notes, client_ref, voided_at, void_reason, voided_by, recorded_by, created_at";
 
+/** List/snapshot columns — deliberately without the message body (egress). */
 export const FOLLOW_UP_COLUMNS =
-  "id, account_id, contact_id, invoice_id, occurred_at, channel, status, summary, message, next_follow_up_on, promise_date, promised_paise, dispute_reason, internal_notes, client_ref, recorded_by, created_at, updated_at";
+  "id, account_id, contact_id, invoice_id, occurred_at, channel, status, summary, has_message, next_follow_up_on, promise_date, promised_paise, dispute_reason, internal_notes, client_ref, recorded_by, created_at, updated_at";
+
+export const FOLLOW_UP_MESSAGE_COLUMNS = "id, message";
 
 export const CUSTOMER_COLUMNS = "id, name, phone, phone_normalized, email, company";
 

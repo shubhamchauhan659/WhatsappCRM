@@ -1,13 +1,39 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { useTranslations } from "next-intl";
+import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { formatDisplayDate, formatDisplayDateTime } from "@/lib/receivables/dates";
 import { formatPaise } from "@/lib/receivables/money";
 import type { EvaluatedPromise } from "@/lib/receivables/promises";
 import type { FollowUpRow, InvoiceRow, PaymentRow } from "@/lib/receivables/types";
 import { FollowUpStatusBadge, PromiseStateBadge } from "./badges";
+
+/**
+ * The sent-message body is not part of the list snapshot (it is the
+ * largest field); fetch it only when someone expands it.
+ */
+function MessageBody({ followUpId }: { followUpId: string }) {
+  const t = useTranslations("Receivables");
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  async function load(open: boolean) {
+    if (!open || text !== null) return;
+    const { data, error } = await createClient().from("follow_ups").select("message").eq("id", followUpId).single();
+    if (error || !data) setFailed(true);
+    else setText((data as { message: string | null }).message ?? "");
+  }
+  return (
+    <details className="text-xs text-muted-foreground" onToggle={(e) => void load((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer">{t("timeline.messageSent")}</summary>
+      <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 text-foreground">
+        {failed ? t("common.loadFailed") : text === null ? t("common.loading") : text}
+      </p>
+    </details>
+  );
+}
 
 /** Follow-up history list (newest first) used on invoice and customer pages. */
 export function FollowUpTimeline({
@@ -57,12 +83,7 @@ export function FollowUpTimeline({
               )}
               {f.dispute_reason && <p className="text-xs text-red-700 dark:text-red-300">{t("timeline.dispute", { reason: f.dispute_reason })}</p>}
               {f.next_follow_up_on && <p className="text-xs text-muted-foreground">{t("timeline.next", { date: formatDisplayDate(f.next_follow_up_on) })}</p>}
-              {f.message && (
-                <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">{t("timeline.messageSent")}</summary>
-                  <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 text-foreground">{f.message}</p>
-                </details>
-              )}
+              {f.has_message && <MessageBody followUpId={f.id} />}
               {f.internal_notes && <p className="text-xs italic text-muted-foreground">{t("timeline.internal", { notes: f.internal_notes })}</p>}
             </li>
           );
