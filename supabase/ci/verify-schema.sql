@@ -163,6 +163,52 @@ BEGIN
     RAISE EXCEPTION 'anon can execute dashboard_overview — migration 059 grants are wrong';
   END IF;
 
+  -- Receivables (060): tables, RLS, derived totals, tenant-safe FKs.
+  IF to_regclass('public.invoices') IS NULL
+     OR to_regclass('public.invoice_payments') IS NULL
+     OR to_regclass('public.follow_ups') IS NULL
+     OR to_regclass('public.audit_events') IS NULL THEN
+    RAISE EXCEPTION 'receivables tables are missing — migration 060 did not apply';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_class
+    WHERE oid IN ('public.invoices'::regclass, 'public.invoice_payments'::regclass,
+                  'public.follow_ups'::regclass, 'public.audit_events'::regclass)
+      AND NOT relrowsecurity
+  ) THEN
+    RAISE EXCEPTION 'RLS is disabled on a receivables table — migration 060 did not apply';
+  END IF;
+  IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public'
+        AND tablename IN ('invoices', 'invoice_payments', 'follow_ups', 'audit_events')) <> 12 THEN
+    RAISE EXCEPTION 'receivables RLS policy count is not 12 — migration 060 policies drifted';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public'
+               AND tablename = 'invoice_payments' AND cmd = 'DELETE') THEN
+    RAISE EXCEPTION 'invoice_payments must not have a DELETE policy (void instead) — migration 060';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'invoices_not_overpaid')
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'invoices_contact_fk')
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'invoice_payments_invoice_fk')
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'follow_ups_contact_fk') THEN
+    RAISE EXCEPTION 'receivables integrity constraints are missing — migration 060 did not apply';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'apply_invoice_payment_totals')
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'guard_invoice_write')
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_invoice_payments') THEN
+    RAISE EXCEPTION 'receivables triggers are missing — migration 060 did not apply';
+  END IF;
+  IF has_function_privilege('authenticated', 'public.apply_invoice_payment_totals()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.record_audit_event()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'trigger-only definer functions are callable by end users — migration 060 grants are wrong';
+  END IF;
+  IF has_table_privilege('anon', 'public.invoices', 'SELECT') THEN
+    RAISE EXCEPTION 'anon can read invoices — migration 060 grants are wrong';
+  END IF;
+  IF pg_get_functiondef('public.redeem_invitation(text)'::regprocedure)
+       NOT LIKE '%FROM invoices WHERE account_id = v_old_account_id%' THEN
+    RAISE EXCEPTION 'redeem_invitation does not guard invoices — migration 060 did not apply';
+  END IF;
+
   RAISE NOTICE 'schema verification passed';
 END
 $$;
