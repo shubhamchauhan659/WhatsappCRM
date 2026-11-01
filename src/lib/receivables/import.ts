@@ -138,7 +138,7 @@ const nameKey = (s: string | null | undefined) => (s ?? "").toLowerCase().replac
 export function planInvoiceImport(table: string[][], options: PlanOptions): ImportPlan {
   const [header = [], ...body] = table;
   const columns = detectColumns(header);
-  const missingRequiredColumns = (["customer", "invoice_number", "amount"] as const).filter((f) => columns[f] === undefined);
+  const missingRequiredColumns: ImportField[] = (["customer", "invoice_number", "amount"] as const).filter((f) => columns[f] === undefined);
   if (columns.invoice_date === undefined && columns.due_date === undefined) missingRequiredColumns.push("due_date");
 
   const byPhone = new Map<string, ExistingCustomer>();

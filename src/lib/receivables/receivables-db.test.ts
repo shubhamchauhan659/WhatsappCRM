@@ -474,5 +474,56 @@ describe("account lifecycle", () => {
       expect(rows, table).toHaveLength(0);
     }
     expect(await invoiceTotals(bobInvoice)).toEqual(bobBefore);
+
+    // Second step of DELETE /api/account: the login itself can then go
+    // (auth.admin.deleteUser) without any foreign key blocking it.
+    await t.db.query(`DELETE FROM auth.users WHERE id = $1`, [dave.userId]);
+    const { rows: left } = await t.db.query(`SELECT 1 FROM profiles WHERE user_id = $1`, [dave.userId]);
+    expect(left).toHaveLength(0);
+  });
+
+  it("the login cannot be deleted while it still owns an account (deletion order is enforced)", async () => {
+    const erin = await t.createUser("erin@example.com");
+    const err = await pgError(t.db.query(`DELETE FROM auth.users WHERE id = $1`, [erin.userId]));
+    expect(err.code).toBe("23001"); // restrict_violation: accounts.owner_user_id ON DELETE RESTRICT
+  });
+
+  it("backup and restore: a plain SQL dump of a business's rows restores identical balances", async () => {
+    const frank = await t.createUser("frank@example.com");
+    const contact = await insertContact(frank, "Frank's customer", "+919811122233");
+    const invoice = await insertInvoice(frank, contact, "F-1", 10_000_00);
+    await pay(frank, invoice, 2_500_00);
+    const before = await invoiceTotals(invoice);
+
+    // Dump: the data a pg_dump of these tables would contain.
+    const snapshot = {
+      invoice: (await t.db.query(`SELECT * FROM invoices WHERE id = $1`, [invoice])).rows[0] as Record<string, unknown>,
+      payments: (await t.db.query(`SELECT * FROM invoice_payments WHERE invoice_id = $1`, [invoice])).rows as Record<string, unknown>[],
+    };
+
+    // Disaster: rows lost.
+    await t.db.exec(`SET session_replication_role = replica`);
+    await t.db.query(`DELETE FROM invoice_payments WHERE invoice_id = $1`, [invoice]);
+    await t.db.query(`DELETE FROM invoices WHERE id = $1`, [invoice]);
+
+    // Restore as pg_restore does (triggers disabled → stored totals are taken verbatim).
+    const insertRow = async (table: string, row: Record<string, unknown>) => {
+      const cols = Object.keys(row).filter((c) => !(table === "invoices" && c === "outstanding_paise"));
+      await t.db.query(
+        `INSERT INTO ${table} (${cols.join(", ")}) OVERRIDING SYSTEM VALUE VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`,
+        cols.map((c) => row[c]),
+      );
+    };
+    await insertRow("invoices", snapshot.invoice);
+    for (const p of snapshot.payments) await insertRow("invoice_payments", p);
+    await t.db.exec(`SET session_replication_role = origin`);
+
+    expect(await invoiceTotals(invoice)).toEqual(before);
+    // And the restored ledger is internally consistent.
+    const { rows } = await t.db.query<{ sum: string }>(
+      `SELECT COALESCE(SUM(amount_paise), 0)::text AS sum FROM invoice_payments WHERE invoice_id = $1 AND voided_at IS NULL AND kind = 'payment'`,
+      [invoice],
+    );
+    expect(Number(rows[0].sum)).toBe(before.paid);
   });
 });

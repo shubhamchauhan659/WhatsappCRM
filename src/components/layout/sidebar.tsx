@@ -12,6 +12,7 @@ import {
   Bot,
   Crown,
   GitBranch,
+  IndianRupee,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -91,6 +92,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
+  { href: "/receivables", labelKey: "receivables", icon: IndianRupee },
   { href: "/inbox", labelKey: "inbox", icon: MessageSquare },
   { href: "/notifications", labelKey: "notifications", icon: Bell },
   { href: "/contacts", labelKey: "contacts", icon: Users },

@@ -165,6 +165,9 @@ export const RATE_LIMITS = {
    *  while still bounding accidental abuse from a script run in a
    *  loop or a compromised admin session spamming role flips. */
   adminAction: { limit: 30, windowMs: 60_000 },
+  /** Owner deleting the whole account. Irreversible, so a handful of
+   *  attempts per hour is plenty for a human and starves a script. */
+  accountDeletion: { limit: 3, windowMs: 60 * 60_000 },
   /** Public REST API (`/api/v1/*`), keyed per API key. 120/min ≈ 2
    *  req/s sustained — comfortable for a polling integration or an
    *  automation firing on inbound events, while bounding a runaway
