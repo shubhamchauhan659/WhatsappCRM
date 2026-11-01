@@ -186,6 +186,7 @@ These files are changed in upstream wacrm code. Re-check them when merging
 | `messages/{en,es,ko,pt}.json` | new keys (es/ko/pt hold English copies) |
 | `package.json` | `test:smoke` script; dev deps `@electric-sql/pglite`, `@electric-sql/pglite-pgvector` |
 | `README.md` | rewritten for PaisaFollow |
+| `.github/CODEOWNERS`, `.github/dependabot.yml` | reviewer changed from the upstream maintainer to `@shubhamchauhan659` |
 
 Everything else is additive (new files). Pull upstream security fixes with:
 
