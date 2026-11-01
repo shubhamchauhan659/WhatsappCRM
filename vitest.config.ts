@@ -1,9 +1,13 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
     tsconfigPaths: true,
-    alias: { "@app-messages": new URL("./messages/en.json", import.meta.url).pathname },
+    // fileURLToPath, not URL#pathname: pathname percent-encodes spaces
+    // ("AI%20Projects"), which breaks the alias for any checkout whose
+    // path contains a space.
+    alias: { "@app-messages": fileURLToPath(new URL("./messages/en.json", import.meta.url)) },
   },
   test: {
     environment: "node",
